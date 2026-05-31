@@ -79067,6 +79067,75 @@ function createTypeChecker(host) {
     }
     return links.immediateTarget;
   }
+  function getCorrelatedRestRebuildType(node, spreadResultType) {
+    let pattern;
+    let restElement;
+    const namedElements = /* @__PURE__ */ new Set();
+    for (const member of node.properties) {
+      if (member.name && isComputedPropertyName(member.name)) {
+        return void 0;
+      }
+      let valueExpr;
+      let reconstructedKey;
+      if (member.kind === 306 /* SpreadAssignment */) {
+        valueExpr = skipParentheses(member.expression);
+      } else if (member.kind === 304 /* PropertyAssignment */) {
+        valueExpr = skipParentheses(member.initializer);
+        reconstructedKey = getTextOfPropertyName(member.name);
+      } else if (member.kind === 305 /* ShorthandPropertyAssignment */) {
+        if (member.objectAssignmentInitializer) {
+          return void 0;
+        }
+        valueExpr = member.name;
+        reconstructedKey = member.name.escapedText;
+      } else {
+        return void 0;
+      }
+      if (!isIdentifier(valueExpr)) {
+        return void 0;
+      }
+      const symbol = getResolvedSymbol(valueExpr);
+      const decl = symbol.valueDeclaration;
+      if (!decl || !isBindingElement(decl) || decl.parent.kind !== 207 /* ObjectBindingPattern */) {
+        return void 0;
+      }
+      if (isSymbolAssigned(symbol) || getTypeOfSymbolAtLocation(symbol, valueExpr) !== getTypeOfSymbol(symbol)) {
+        return void 0;
+      }
+      const elementPattern = decl.parent;
+      if (pattern && pattern !== elementPattern) {
+        return void 0;
+      }
+      pattern = elementPattern;
+      if (member.kind === 306 /* SpreadAssignment */) {
+        if (!decl.dotDotDotToken || restElement) {
+          return void 0;
+        }
+        restElement = decl;
+      } else {
+        if (decl.dotDotDotToken || !isIdentifier(decl.name) || decl.initializer || decl.propertyName && isComputedPropertyName(decl.propertyName)) {
+          return void 0;
+        }
+        if (reconstructedKey !== getTextOfPropertyName(decl.propertyName || decl.name) || namedElements.has(decl)) {
+          return void 0;
+        }
+        namedElements.add(decl);
+      }
+    }
+    if (!pattern || !restElement) {
+      return void 0;
+    }
+    for (const element of pattern.elements) {
+      if (element.dotDotDotToken ? element !== restElement : !namedElements.has(element)) {
+        return void 0;
+      }
+    }
+    const sourceType = getTypeForBindingElementParent(pattern.parent, 0 /* Normal */);
+    if (sourceType && isTypeAssignableTo(sourceType, spreadResultType)) {
+      return sourceType;
+    }
+    return void 0;
+  }
   function checkObjectLiteral(node, checkMode = 0 /* Normal */) {
     const inDestructuringPattern = isAssignmentTarget(node);
     checkGrammarObjectLiteralExpression(node, inDestructuringPattern);
@@ -79209,7 +79278,9 @@ function createTypeChecker(host) {
         hasComputedStringProperty = false;
         hasComputedNumberProperty = false;
       }
-      return mapType(spread, (t) => t === emptyObjectType ? createObjectLiteralType() : t);
+      const spreadResultType = mapType(spread, (t) => t === emptyObjectType ? createObjectLiteralType() : t);
+      const rebuiltType = getCorrelatedRestRebuildType(node, spreadResultType);
+      return rebuiltType || spreadResultType;
     }
     return createObjectLiteralType();
     function createObjectLiteralType() {
